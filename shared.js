@@ -5,7 +5,7 @@ let snapshot=null,password='',view='cards',page=1;
 const stamp=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'未填写';
 const b=id=>snapshot.batches.find(row=>row.id===id);
 const cardUrl=serial=>'#/cards/'+encodeURIComponent(serial);
-const facts=c=>[['单卡 ID',c.serial],['权益 SKU',c.sku||'未识别规范'],['条码交付日期',c.deliveryDate||'未识别规范'],['地区',{domestic:'国内',overseas:'海外'}[c.region]||'未识别规范'],['会员周期',{month:'月卡',year:'年卡'}[c.membershipCycle]||'未识别规范'],['会员档位',c.membershipTier||'未识别规范'],['尾号',c.unitNumber||'未识别规范'],['所属实物产品',products[b(c.batchId)?.product]||'未知'],['所属批次',b(c.batchId)?.batchNo],['批次用途',b(c.batchId)?.purpose],['状态',statuses[c.status]],['入库时间',stamp(c.receivedAt)],['出库时间',stamp(c.shippedAt)],['单卡备注',c.note||'未填写']];
+const facts=c=>[['单卡 ID',c.serial],...(c.originalSerial?[['原始登记条码',c.originalSerial]]:[]),['权益 SKU',c.sku||'未识别规范'],['条码交付日期',c.deliveryDate||'未识别规范'],['地区',{domestic:'国内',overseas:'海外'}[c.region]||'未识别规范'],['会员周期',{month:'月卡',year:'年卡'}[c.membershipCycle]||'未识别规范'],['会员档位',c.membershipTier||'未识别规范'],['尾号',c.unitNumber||'未识别规范'],['所属实物产品',products[b(c.batchId)?.product]||'未知'],['所属批次',b(c.batchId)?.batchNo],['批次用途',b(c.batchId)?.purpose],['状态',statuses[c.status]],['入库时间',stamp(c.receivedAt)],['出库时间',stamp(c.shippedAt)],['单卡备注',c.note||'未填写']];
 async function load(){
   let source='snapshot.enc.json';
   if(!['localhost','127.0.0.1'].includes(location.hostname)){
@@ -30,8 +30,8 @@ function render(){
   $('status').hidden=view!=='cards';$('product').hidden=view==='logs';$('exportLogs').hidden=view!=='logs';
   document.querySelectorAll('[data-view]').forEach(el=>el.classList.toggle('selected',el.dataset.view===view));
   const match=location.hash.match(/^#\/cards\/(.+)$/);
-  if(match){let id;try{id=decodeURIComponent(match[1]);}catch{id='';}const c=snapshot.cards.find(c=>c.serial===id);
-    $('results').innerHTML=c?`<article class="detail"><a href="#/">← 返回列表</a><h2>${h(c.serial)}</h2><dl>${facts(c).map(([label,value])=>`<div><dt>${h(label)}</dt><dd>${h(value)}</dd></div>`).join('')}</dl><p class="note">条码交付日期为标签编码信息。包装内兑换码与此编号未绑定，无法核验激活情况。</p><h3>此卡操作日志</h3>${eventsHtml(snapshot.auditEvents.filter(e=>(e.serials||[]).includes(c.serial)))}</article>`:'<p class="empty">未找到该单卡</p>';
+  if(match){let id;try{id=decodeURIComponent(match[1]);}catch{id='';}const c=snapshot.cards.find(c=>c.serial===id||c.originalSerial===id);
+    $('results').innerHTML=c?`<article class="detail"><a href="#/">← 返回列表</a><h2>${h(c.serial)}</h2><dl>${facts(c).map(([label,value])=>`<div><dt>${h(label)}</dt><dd>${h(value)}</dd></div>`).join('')}</dl><p class="note">条码交付日期为标签编码信息。包装内兑换码与此编号未绑定，无法核验激活情况。</p><h3>此卡操作日志</h3>${eventsHtml(snapshot.auditEvents.filter(e=>((e.serials||[]).includes(c.serial)||(c.originalSerial&&(e.serials||[]).includes(c.originalSerial)))))}</article>`:'<p class="empty">未找到该单卡</p>';
     $('pageInfo').textContent='单卡详情';$('previous').disabled=$('next').disabled=true;return;
   }
   const q=$('search').value.trim().toLowerCase(),product=$('product').value,status=$('status').value;
