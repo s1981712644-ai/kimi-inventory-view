@@ -1,6 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id),h=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const products={soft:'软盘会员卡',cd:'音乐光碟'},statuses={pending:'待入库',stock:'在库',out:'已出库',lost:'已记损'};
+const A=window.ProjectAccounts;
 let snapshot=null,password='',view='cards',page=1;
 const stamp=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'未填写';
 const b=id=>snapshot.batches.find(row=>row.id===id);
@@ -27,12 +28,27 @@ function render(){
   $('syncInfo').textContent=`快照生成时间：${stamp(snapshot.generatedAt)}（上海时间）${stale?' · 已超过 24 小时，请向管理员核对最新库存':''}`;
   $('syncInfo').classList.toggle('stale',stale);
   $('metrics').innerHTML=[['当前在库',snapshot.cards.filter(c=>c.status==='stock').length],['已出库',snapshot.cards.filter(c=>c.status==='out').length],['已记损',snapshot.cards.filter(c=>c.status==='lost').length],['到货批次',snapshot.batches.length]].map(([name,count])=>`<div class="metric"><span>${h(name)}</span><strong>${count}</strong></div>`).join('');
-  $('status').hidden=view!=='cards';$('product').hidden=view==='logs';$('exportLogs').hidden=view!=='logs';
+  $('status').hidden=view!=='cards';$('product').hidden=!['cards','batches'].includes(view);$('exportLogs').hidden=view!=='logs';
   document.querySelectorAll('[data-view]').forEach(el=>el.classList.toggle('selected',el.dataset.view===view));
   const match=location.hash.match(/^#\/cards\/(.+)$/);
   if(match){let id;try{id=decodeURIComponent(match[1]);}catch{id='';}const c=snapshot.cards.find(c=>c.serial===id||c.originalSerial===id);
     $('results').innerHTML=c?`<article class="detail"><a href="#/">← 返回列表</a><h2>${h(c.serial)}</h2><dl>${facts(c).map(([label,value])=>`<div><dt>${h(label)}</dt><dd>${h(value)}</dd></div>`).join('')}</dl><p class="note">条码交付日期为标签编码信息。包装内兑换码与此编号未绑定，无法核验激活情况。</p><h3>此卡操作日志</h3>${eventsHtml(snapshot.auditEvents.filter(e=>((e.serials||[]).includes(c.serial)||(c.originalSerial&&(e.serials||[]).includes(c.originalSerial)))))}</article>`:'<p class="empty">未找到该单卡</p>';
     $('pageInfo').textContent='单卡详情';$('previous').disabled=$('next').disabled=true;return;
+  }
+  const projectMatch=location.hash.match(/^#\/projects\/(.+)$/);
+  if(projectMatch){
+    let id;try{id=decodeURIComponent(projectMatch[1]);}catch{id='';}
+    const project=(snapshot.projects||[]).find(p=>p.id===id);
+    const orders=(snapshot.orders||[]).filter(o=>o.projectId===id);
+    $('results').innerHTML=project?`<article class="detail"><a href="#/">← 返回列表</a><h2>${h(project.name)}</h2><p>${h(project.purpose)} · ${project.status==='active'?'进行中':'已结束'}</p><p>${h(project.note)}</p>${projectMetrics(orders)}<p class="note">净收支 = 收入 − 成本 − 快递费；快递费按整笔出库计一次。</p><h3>项目出库明细</h3>${orders.map(sharedOrder).join('')||'<p class="empty">暂无出库</p>'}</article>`:'<p class="empty">未找到该项目</p>';
+    $('pageInfo').textContent='项目详情';$('previous').disabled=$('next').disabled=true;return;
+  }
+  if(['projects','orders'].includes(view)){
+    const q=$('search').value.trim().toLowerCase();
+    const rows=(view==='projects'?(snapshot.projects||[]):(snapshot.orders||[])).filter(row=>!q||JSON.stringify([row,...(row.lines||[]).map(l=>b(l.batchId))]).toLowerCase().includes(q));
+    const pages=Math.max(1,Math.ceil(rows.length/20));page=Math.min(page,pages);
+    $('results').innerHTML=!rows.length?'<div class="empty">暂无符合条件的记录</div>':view==='projects'?rows.slice((page-1)*20,page*20).map(p=>`<article class="event"><strong><a href="#/projects/${encodeURIComponent(p.id)}">${h(p.name)}</a></strong><p>${h(p.purpose)} · ${p.status==='active'?'进行中':'已结束'}</p>${projectMetrics((snapshot.orders||[]).filter(o=>o.projectId===p.id))}</article>`).join(''):rows.slice((page-1)*20,page*20).map(sharedOrder).join('');
+    $('pageInfo').textContent=`共 ${rows.length} 条 · 第 ${page} / ${pages} 页`;$('previous').disabled=page===1;$('next').disabled=page===pages;return;
   }
   const q=$('search').value.trim().toLowerCase(),product=$('product').value,status=$('status').value;
   let rows=view==='cards'?snapshot.cards.filter(c=>(status==='all'||c.status===status)&&(product==='all'||b(c.batchId)?.product===product)&&(!q||JSON.stringify([c,b(c.batchId),...facts(c).flat()]).toLowerCase().includes(q))):view==='batches'?snapshot.batches.filter(row=>(product==='all'||row.product===product)&&(!q||JSON.stringify(row).toLowerCase().includes(q))):snapshot.auditEvents.filter(row=>!q||JSON.stringify(row).toLowerCase().includes(q));
@@ -40,6 +56,15 @@ function render(){
   const table=(headers,body)=>`<table><thead><tr>${headers.map(head=>`<th>${head}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
   $('results').innerHTML=!rows.length?'<div class="empty">没有符合条件的记录</div>':view==='cards'?table(['单卡 ID / 条码','权益 SKU','实物产品 / 批次','状态','条码交付日期','入库 / 出库时间'],slice.map(c=>`<tr><td><a href="${cardUrl(c.serial)}">${h(c.serial)}</a></td><td>${h(c.sku||'未识别规范')}<small>${h(c.unitNumber||'')}</small></td><td>${h(products[b(c.batchId)?.product])}<small><a href="#/" data-batch="${h(b(c.batchId)?.batchNo)}">${h(b(c.batchId)?.batchNo)}</a></small></td><td><span class="status ${h(c.status)}">${h(statuses[c.status])}</span></td><td>${h(c.deliveryDate||'未识别规范')}</td><td>${h(stamp(c.receivedAt))}<small>${h(stamp(c.shippedAt))}</small></td></tr>`).join('')):view==='batches'?table(['批次号','产品','到货日期','用途 / 内容','在库 / 待入 / 已出 / 记损'],slice.map(row=>{const cards=snapshot.cards.filter(c=>c.batchId===row.id);return `<tr><td><a href="#/" data-batch="${h(row.batchNo)}">${h(row.batchNo)}</a></td><td>${h(products[row.product])}</td><td>${h(row.arrivalDate)}</td><td>${h(row.purpose)}<small>${h(row.content)}</small></td><td>${cards.filter(c=>c.status==='stock').length} / ${cards.filter(c=>c.status==='pending').length} / ${cards.filter(c=>c.status==='out').length} / ${cards.filter(c=>c.status==='lost').length}</td></tr>`;}).join('')):eventsHtml(slice);
   $('pageInfo').textContent=`共 ${rows.length} 条 · 第 ${page} / ${pages} 页`;$('previous').disabled=page===1;$('next').disabled=page===pages;
+}
+
+function projectMetrics(orders){
+  const t=A.totals(orders);
+  return `<p>累计出库 <strong>${t.qty} 张</strong> · 收入 ${A.yuan(t.income)} · 成本 ${A.yuan(t.cost)} · 快递费 ${A.yuan(t.freight)} · 净收支 ${A.yuan(t.net)}</p>`;
+}
+function sharedOrder(o){
+  const p=(snapshot.projects||[]).find(p=>p.id===o.projectId);
+  return `<article class="event"><strong>订单号：${h(o.orderNo)}</strong><small>${stamp(o.createdAt)} · ${p?`<a href="#/projects/${encodeURIComponent(p.id)}">${h(p.name)}</a>`:'未绑定项目'}</small><p>用途：${h(o.purpose)} · ${o.qty} 张 · ${A.directionNames[o.direction]} ${o.amountCents===null?'':A.yuan(o.amountCents)} · 本次快递费 ${A.yuan(o.freightCents)}</p><div class="order-lines"><table><thead><tr><th>批次</th><th>产品</th><th>数量</th><th>标价 / 张</th><th>实际价格 / 张</th><th>小计</th></tr></thead><tbody>${o.lines.map(l=>`<tr><td>${h(b(l.batchId)?.batchNo)}</td><td>${h(products[b(l.batchId)?.product])}</td><td>${l.qty}</td><td>${A.yuan(l.listPriceCents)}</td><td>${A.yuan(l.actualPriceCents)}</td><td>${A.yuan(l.amountCents)}</td></tr>`).join('')}</tbody></table></div><details><summary>查看出库卡号</summary><p>${o.lines.flatMap(l=>l.serials).map(s=>`<a href="${cardUrl(s)}">${h(s)}</a>`).join(' · ')}</p></details><p>备注：${h(o.note||'未填写')}</p></article>`;
 }
 function eventsHtml(events){return events.map(e=>`<article class="event"><strong>${h(e.actionName||e.action)}</strong><small>${h(stamp(e.createdAt))} · ${h(e.operator)}</small><p>${h(e.summary)}</p><p>原因 / 备注：${h(e.reason)}</p>${(e.barcodes||[]).map(info=>`<p>${h(info.serial)} · ${h(info.deliveryDate)} · ${h(info.sku)} · 尾号 ${h(info.unitNumber)}</p>`).join('')}${e.changes?.length?`<details><summary>查看修改前后（${e.changes.length} 项）</summary><table><thead><tr><th>对象</th><th>字段</th><th>修改前</th><th>修改后</th></tr></thead><tbody>${e.changes.map(c=>`<tr><td>${h(c.label)}</td><td>${h(c.fieldName)}</td><td>${h(c.beforeText)}</td><td>${h(c.afterText)}</td></tr>`).join('')}</tbody></table></details>`:''}<small>日志编号 ${h(e.id)}</small></article>`).join('')||'<p class="empty">没有操作日志</p>';}
 $('unlockForm').addEventListener('submit',async event=>{event.preventDefault();$('unlockButton').disabled=true;password=$('password').value;message('正在解密库存副本…');try{await load();$('password').value='';$('unlock').hidden=true;$('content').hidden=false;$('lock').hidden=false;render();}catch(error){password='';snapshot=null;message(error.name==='OperationError'?'查看密码不正确或数据校验失败':error.message,true);}finally{$('unlockButton').disabled=false;}});
